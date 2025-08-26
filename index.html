@@ -29,14 +29,18 @@
 </head>
 <body>
   <div id="top-bar">
-    <label>GitHub Token:</label>
-    <input type="password" id="token" placeholder="Personal Access Token" style="width:200px;">
-    <button onclick="cloneRepo()">Clone Repo</button>
-    <button onclick="commitAndPush()">Commit & Push</button>
-    <button onclick="runJS()">Run JS</button>
-    <button onclick="runPython()">Run Python</button>
-    <button onclick="addNewTab()">New File</button>
-  </div>
+  <label>GitHub Token:</label>
+  <input type="password" id="token" placeholder="Personal Access Token" style="width:180px;">
+  
+  <label>Repo Name:</label>
+  <input type="text" id="repoName" placeholder="e.g., my-repo" style="width:150px;">
+
+  <button onclick="cloneRepo()">Clone Repo</button>
+  <button onclick="commitAndPush()">Commit & Push</button>
+  <button onclick="runJS()">Run JS</button>
+  <button onclick="runPython()">Run Python</button>
+  <button onclick="addNewTab()">New File</button>
+</div>
 
   <div id="container">
     <div id="editor-container">
@@ -148,6 +152,36 @@
     const fs = new LightningFS('fs');
     const pfs = fs.promises;
     const git = window.git;
+
+        async function cloneRepo() {
+      const token = document.getElementById('token').value;
+      const repoName = document.getElementById('repoName').value.trim();
+      if (!token || !repoName) return term.writeln('Missing token or repo name!');
+      
+      const remote = `https://${token}@github.com/lvhu-coder/${repoName}.git`;
+      term.writeln(`Cloning https://github.com/lvhu-coder/${repoName}.git ...`);
+
+      try {
+        await git.clone({ fs: pfs, dir: '/', url: remote, singleBranch: true, depth: 1 });
+        term.writeln('Clone successful!');
+
+        const fileNames = await pfs.readdir('/');
+        files = {};
+        for (const file of fileNames) {
+          try {
+            const content = await pfs.readFile('/' + file, { encoding: 'utf8' });
+            files[file] = content;
+          } catch(e) {
+            term.writeln(`Could not read file: ${file}`);
+          }
+        }
+        const firstFile = Object.keys(files)[0];
+        if (firstFile) switchTab(firstFile);
+        renderTabs();
+      } catch(err) {
+        term.writeln('Clone failed: ' + err);
+      }
+    }
 
     async function cloneRepo() {
       const token = document.getElementById('token').value;
