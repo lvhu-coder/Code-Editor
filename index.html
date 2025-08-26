@@ -10,8 +10,8 @@
     input, button { margin-left: 5px; padding: 3px; background: #222; color: white; border: 1px solid #333; }
     #container { display: flex; flex-direction: column; flex: 1; }
     #editor-container { flex: 2; display: flex; flex-direction: column; }
-    #tabs { background: #111; display: flex; }
-    .tab { padding: 5px 10px; cursor: pointer; border-right: 1px solid #333; background: #111; color: white; }
+    #tabs { background: #111; display: flex; overflow-x: auto; }
+    .tab { padding: 5px 10px; cursor: pointer; border-right: 1px solid #333; background: #111; color: white; white-space: nowrap; }
     .tab.active { background: #000; font-weight: bold; }
     #editor { flex: 1; }
     #terminal { flex: 1; background: #000; }
@@ -22,11 +22,17 @@
   <script src="https://cdn.jsdelivr.net/npm/xterm/lib/xterm.js"></script>
   <!-- Pyodide -->
   <script src="https://cdn.jsdelivr.net/pyodide/v0.23.4/full/pyodide.js"></script>
+  <!-- isomorphic-git -->
+  <script src="https://cdn.jsdelivr.net/npm/isomorphic-git@1.21.2/dist/bundle.umd.min.js"></script>
+  <!-- LightningFS -->
+  <script src="https://cdn.jsdelivr.net/npm/lightning-fs@4.1.2/dist/lightning-fs.min.js"></script>
 </head>
 <body>
   <div id="top-bar">
     <label>GitHub Token:</label>
     <input type="password" id="token" placeholder="Personal Access Token" style="width:200px;">
+    <button onclick="cloneRepo()">Clone Repo</button>
+    <button onclick="commitAndPush()">Commit & Push</button>
     <button onclick="runJS()">Run JS</button>
     <button onclick="runPython()">Run Python</button>
     <button onclick="addNewTab()">New File</button>
@@ -41,17 +47,18 @@
   </div>
 
   <script>
+    // === Editor & Tabs Setup ===
     let editor;
     let files = {};
     let currentFile = null;
+    const tabsDiv = document.getElementById('tabs');
 
-    // === Monaco Editor Setup ===
     require.config({ paths: { vs: 'https://cdn.jsdelivr.net/npm/monaco-editor@0.38.0/min/vs' }});
     require(['vs/editor/editor.main'], function() {
       editor = monaco.editor.create(document.getElementById('editor'), {
         value: '',
         language: 'javascript',
-        theme: 'vs-dark', // black theme
+        theme: 'vs-dark',
         automaticLayout: true,
         fontSize: 14,
         fontFamily: 'Fira Code, monospace'
@@ -64,15 +71,13 @@
       });
     });
 
-    // === Tabs Management ===
-    const tabsDiv = document.getElementById('tabs');
     function renderTabs() {
       tabsDiv.innerHTML = '';
       for (const file in files) {
         const tab = document.createElement('div');
         tab.className = 'tab';
         if (file === currentFile) tab.classList.add('active');
-        tab.textContent = file;
+        tab.textContent = file + (files[file] && files[file].unsaved ? '*' : '');
         tab.onclick = () => switchTab(file);
         tabsDiv.appendChild(tab);
       }
@@ -96,7 +101,7 @@
       renderTabs();
     }
 
-    // === Load saved files from localStorage ===
+    // Load saved files from localStorage
     const savedFiles = localStorage.getItem('browser-codespace-files');
     if (savedFiles) {
       files = JSON.parse(savedFiles);
@@ -110,8 +115,15 @@
     term.open(document.getElementById('terminal'));
     term.writeln('Terminal Ready!');
 
-    // === JS Runner ===
-    function runJS() {
+    // === Pyodide Setup ===
+    let pyodide;
+    async function loadPyodideAndPackages() {
+      pyodide = await loadPyodide();
+      term.writeln('Python Ready!');
+    }
+    loadPyodideAndPackages();
+
+    async function runJS() {
       const code = editor.getValue();
       try {
         const result = eval(code);
@@ -121,14 +133,6 @@
       }
     }
 
-    // === Python Runner ===
-    let pyodide;
-    async function loadPyodideAndPackages() {
-      pyodide = await loadPyodide();
-      term.writeln('Python Ready!');
-    }
-    loadPyodideAndPackages();
-
     async function runPython() {
       const code = editor.getValue();
       if (!pyodide) { term.writeln('Pyodide not loaded yet!'); return; }
@@ -137,6 +141,65 @@
         term.writeln('Python Output: ' + result);
       } catch(err) {
         term.writeln('Python Error: ' + err);
+      }
+    }
+
+    // === Git + Browser FS Setup ===
+    const fs = new LightningFS('fs');
+    const pfs = fs.promises;
+    const git = window.git;
+
+    async function cloneRepo() {
+      const token = document.getElementById('token').value;
+      const repoName = prompt('Enter GitHub repo name:');
+      if (!token || !repoName) return term.writeln('Missing token or repo name!');
+      const remote = `https://${token}@github.com/lvhu-coder/${repoName}.git`;
+      term.writeln(`Cloning https://github.com/lvhu-coder/${repoName}.git ...`);
+
+      try {
+        await git.clone({ fs: pfs, dir: '/', url: remote, singleBranch: true, depth: 1 });
+        term.writeln('Clone successful!');
+
+        const fileNames = await pfs.readdir('/');
+        files = {};
+        for (const file of fileNames) {
+          try {
+            const content = await pfs.readFile('/' + file, { encoding: 'utf8' });
+            files[file] = content;
+          } catch(e) {
+            term.writeln(`Could not read file: ${file}`);
+          }
+        }
+        const firstFile = Object.keys(files)[0];
+        if (firstFile) switchTab(firstFile);
+        renderTabs();
+      } catch(err) {
+        term.writeln('Clone failed: ' + err);
+      }
+    }
+
+    async function commitAndPush() {
+      const token = document.getElementById('token').value;
+      if (!token) return term.writeln('Missing token!');
+      const repoName = prompt('Enter GitHub repo name to push changes:');
+      if (!repoName) return term.writeln('Missing repo name!');
+
+      try {
+        for (const file in files) {
+          await pfs.writeFile('/' + file, files[file]);
+          await git.add({ fs: pfs, dir: '/', filepath: file });
+        }
+        await git.commit({
+          fs: pfs,
+          dir: '/',
+          message: 'Update from Browser Codespace',
+          author: { name: 'lvhu-coder', email: 'lvhu-coder@example.com' }
+        });
+        const remote = `https://${token}@github.com/lvhu-coder/${repoName}.git`;
+        await git.push({ fs: pfs, dir: '/', remote: remote, ref: 'main' });
+        term.writeln('Push successful!');
+      } catch(err) {
+        term.writeln('Commit/Push failed: ' + err);
       }
     }
   </script>
