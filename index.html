@@ -2,77 +2,115 @@
 <html lang="en">
 <head>
   <meta charset="UTF-8">
-  <title>Browser Codespace</title>
+  <title>Browser Codespace Tabs</title>
   <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/xterm/css/xterm.css" />
   <style>
-    body, html { margin: 0; height: 100%; display: flex; flex-direction: column; font-family: sans-serif; }
-    #top-bar { padding: 5px; background: #1e1e1e; color: white; display: flex; align-items: center; }
-    #container { display: flex; flex: 1; }
-    #file-explorer { width: 200px; background: #2d2d2d; color: white; padding: 5px; overflow-y: auto; }
-    #editor { flex: 1; height: 100%; }
-    #terminal { height: 150px; width: 100%; background: #1e1e1e; }
-    input, button { margin-left: 5px; padding: 3px; }
-    .file-item { cursor: pointer; padding: 2px; }
-    .file-item:hover { background: #3d3d3d; }
+    body, html { margin: 0; height: 100%; display: flex; flex-direction: column; font-family: sans-serif; background-color: #000; color: white; }
+    #top-bar { padding: 5px; background: #111; display: flex; align-items: center; }
+    input, button { margin-left: 5px; padding: 3px; background: #222; color: white; border: 1px solid #333; }
+    #container { display: flex; flex-direction: column; flex: 1; }
+    #editor-container { flex: 2; display: flex; flex-direction: column; }
+    #tabs { background: #111; display: flex; }
+    .tab { padding: 5px 10px; cursor: pointer; border-right: 1px solid #333; background: #111; color: white; }
+    .tab.active { background: #000; font-weight: bold; }
+    #editor { flex: 1; }
+    #terminal { flex: 1; background: #000; }
   </style>
   <!-- Monaco Editor -->
   <script src="https://cdn.jsdelivr.net/npm/monaco-editor@0.38.0/min/vs/loader.js"></script>
   <!-- xterm.js -->
   <script src="https://cdn.jsdelivr.net/npm/xterm/lib/xterm.js"></script>
-  <!-- Pyodide for Python -->
+  <!-- Pyodide -->
   <script src="https://cdn.jsdelivr.net/pyodide/v0.23.4/full/pyodide.js"></script>
-  <!-- isomorphic-git -->
-  <script src="https://cdn.jsdelivr.net/npm/isomorphic-git@1.21.2/dist/bundle.umd.min.js"></script>
-  <!-- LightningFS for browser storage -->
-  <script src="https://cdn.jsdelivr.net/npm/lightning-fs@4.1.2/dist/lightning-fs.min.js"></script>
 </head>
 <body>
   <div id="top-bar">
     <label>GitHub Token:</label>
     <input type="password" id="token" placeholder="Personal Access Token" style="width:200px;">
-    <button onclick="cloneRepo()">Clone Repo</button>
-    <button onclick="commitAndPush()">Commit & Push</button>
-    <button onclick="runPython()">Run Python</button>
     <button onclick="runJS()">Run JS</button>
+    <button onclick="runPython()">Run Python</button>
+    <button onclick="addNewTab()">New File</button>
   </div>
+
   <div id="container">
-    <div id="file-explorer"></div>
-    <div id="editor"></div>
+    <div id="editor-container">
+      <div id="tabs"></div>
+      <div id="editor"></div>
+    </div>
+    <div id="terminal"></div>
   </div>
-  <div id="terminal"></div>
 
   <script>
-    // === Monaco Editor Setup ===
     let editor;
-    let currentFile = 'index.html'; // default
-    let files = {}; // store file content in memory
+    let files = {};
+    let currentFile = null;
+
+    // === Monaco Editor Setup ===
     require.config({ paths: { vs: 'https://cdn.jsdelivr.net/npm/monaco-editor@0.38.0/min/vs' }});
     require(['vs/editor/editor.main'], function() {
       editor = monaco.editor.create(document.getElementById('editor'), {
         value: '',
         language: 'javascript',
-        theme: 'vs-dark',
-        automaticLayout: true
+        theme: 'vs-dark', // black theme
+        automaticLayout: true,
+        fontSize: 14,
+        fontFamily: 'Fira Code, monospace'
       });
       editor.onDidChangeModelContent(() => {
-        files[currentFile] = editor.getValue();
-        localStorage.setItem('browser-codespace-files', JSON.stringify(files));
+        if (currentFile) {
+          files[currentFile] = editor.getValue();
+          localStorage.setItem('browser-codespace-files', JSON.stringify(files));
+        }
       });
     });
 
-    // === xterm.js Terminal ===
-    const term = new Terminal();
-    term.open(document.getElementById('terminal'));
-    term.writeln('Browser Codespace Terminal Ready!');
-
-    // === Pyodide Setup ===
-    let pyodide;
-    async function loadPyodideAndPackages() {
-      pyodide = await loadPyodide();
-      term.writeln('Python (Pyodide) Ready!');
+    // === Tabs Management ===
+    const tabsDiv = document.getElementById('tabs');
+    function renderTabs() {
+      tabsDiv.innerHTML = '';
+      for (const file in files) {
+        const tab = document.createElement('div');
+        tab.className = 'tab';
+        if (file === currentFile) tab.classList.add('active');
+        tab.textContent = file;
+        tab.onclick = () => switchTab(file);
+        tabsDiv.appendChild(tab);
+      }
     }
-    loadPyodideAndPackages();
 
+    function switchTab(file) {
+      currentFile = file;
+      editor.setValue(files[file]);
+      // auto-detect language
+      if (file.endsWith('.js')) monaco.editor.setModelLanguage(editor.getModel(), 'javascript');
+      else if (file.endsWith('.py')) monaco.editor.setModelLanguage(editor.getModel(), 'python');
+      else monaco.editor.setModelLanguage(editor.getModel(), 'plaintext');
+      renderTabs();
+    }
+
+    function addNewTab() {
+      const fileName = prompt('Enter new file name (e.g., script.js):');
+      if (!fileName) return;
+      files[fileName] = '';
+      switchTab(fileName);
+      renderTabs();
+    }
+
+    // === Load saved files from localStorage ===
+    const savedFiles = localStorage.getItem('browser-codespace-files');
+    if (savedFiles) {
+      files = JSON.parse(savedFiles);
+      const firstFile = Object.keys(files)[0];
+      if (firstFile) switchTab(firstFile);
+      renderTabs();
+    }
+
+    // === Terminal Setup ===
+    const term = new Terminal({ theme: { background: '#000', foreground: '#fff' } });
+    term.open(document.getElementById('terminal'));
+    term.writeln('Terminal Ready!');
+
+    // === JS Runner ===
     function runJS() {
       const code = editor.getValue();
       try {
@@ -83,6 +121,14 @@
       }
     }
 
+    // === Python Runner ===
+    let pyodide;
+    async function loadPyodideAndPackages() {
+      pyodide = await loadPyodide();
+      term.writeln('Python Ready!');
+    }
+    loadPyodideAndPackages();
+
     async function runPython() {
       const code = editor.getValue();
       if (!pyodide) { term.writeln('Pyodide not loaded yet!'); return; }
@@ -92,96 +138,6 @@
       } catch(err) {
         term.writeln('Python Error: ' + err);
       }
-    }
-
-    // === Browser FS & Git Setup ===
-    const fs = new LightningFS('fs'); 
-    const pfs = fs.promises;
-    const git = window.git;
-
-    async function cloneRepo() {
-      const token = document.getElementById('token').value;
-      const repoName = prompt('Enter the GitHub repo name (e.g., my-repo):');
-      if (!token || !repoName) return term.writeln('Missing token or repo name!');
-      const remote = `https://${token}@github.com/lvhu-coder/${repoName}.git`;
-      term.writeln(`Cloning https://github.com/lvhu-coder/${repoName}.git ...`);
-      try {
-        await git.clone({ fs: pfs, dir: '/', url: remote, singleBranch: true, depth: 1 });
-        term.writeln('Clone successful!');
-        await loadFilesFromFS('/');
-      } catch(err) {
-        term.writeln('Clone failed: ' + err);
-      }
-    }
-
-    async function commitAndPush() {
-      const token = document.getElementById('token').value;
-      if (!token) return term.writeln('Missing token!');
-      const repoName = prompt('Enter the GitHub repo name to push changes:');
-      if (!repoName) return term.writeln('Missing repo name!');
-      try {
-        for (const file in files) {
-          await pfs.writeFile('/' + file, files[file]);
-          await git.add({ fs: pfs, dir: '/', filepath: file });
-        }
-        await git.commit({ 
-          fs: pfs, 
-          dir: '/', 
-          message: 'Update from Browser Codespace', 
-          author: { name: 'lvhu-coder', email: 'lvhu-coder@example.com' } 
-        });
-        const remote = `https://${token}@github.com/lvhu-coder/${repoName}.git`;
-        await git.push({ fs: pfs, dir: '/', remote: remote, ref: 'main' });
-        term.writeln('Push successful!');
-      } catch(err) {
-        term.writeln('Commit/Push failed: ' + err);
-      }
-    }
-
-    // === File Explorer & Browser Storage ===
-    async function loadFilesFromFS(dir) {
-      const fileNames = await pfs.readdir(dir);
-      files = {};
-      for (const file of fileNames) {
-        try {
-          const content = await pfs.readFile('/' + file, { encoding: 'utf8' });
-          files[file] = content;
-        } catch(e) {}
-      }
-      localStorage.setItem('browser-codespace-files', JSON.stringify(files));
-      renderFileExplorer();
-      // Load first file
-      if (fileNames.length > 0) switchFile(fileNames[0]);
-    }
-
-    function renderFileExplorer() {
-      const explorer = document.getElementById('file-explorer');
-      explorer.innerHTML = '';
-      for (const file in files) {
-        const div = document.createElement('div');
-        div.className = 'file-item';
-        div.textContent = file;
-        div.onclick = () => switchFile(file);
-        explorer.appendChild(div);
-      }
-    }
-
-    function switchFile(file) {
-      currentFile = file;
-      editor.setValue(files[file]);
-      // detect language by extension
-      if (file.endsWith('.js')) monaco.editor.setModelLanguage(editor.getModel(), 'javascript');
-      else if (file.endsWith('.py')) monaco.editor.setModelLanguage(editor.getModel(), 'python');
-      else monaco.editor.setModelLanguage(editor.getModel(), 'plaintext');
-    }
-
-    // === Load saved files from browser storage on startup ===
-    const savedFiles = localStorage.getItem('browser-codespace-files');
-    if (savedFiles) {
-      files = JSON.parse(savedFiles);
-      renderFileExplorer();
-      const firstFile = Object.keys(files)[0];
-      if (firstFile) switchFile(firstFile);
     }
   </script>
 </body>
